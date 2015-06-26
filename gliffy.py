@@ -18,11 +18,15 @@ from collections import OrderedDict
 
 logger = logging.getLogger(__name__)
 
+class ShapeException(Exception):
+    pass
+
 class Gliffy(object):
     gliffy_object_raw = {}
     current_node_id = 0
+    embedded_resources_map = {}  # Name of resource mapped to the internal embeddedResources ID that gliffy uses.
 
-    def __init__(self, debug=False):
+    def __init__(self, debug=False, extra_libraries=[], embeddedResources=[]):
         logger.handlers = []  # In case we are doing multiple imports, reloading and so on.. Dont want double-logs
 
         if debug:
@@ -33,6 +37,22 @@ class Gliffy(object):
         else:
             logger.addHandler(logging.NullHandler())
 
+        embeddedResourcesList = []
+        embeddedResourcesCount = 0
+        for e in embeddedResources:
+            self.embedded_resources_map[e['name']] = embeddedResourcesCount
+            embeddedResourcesList .append({
+                "id": embeddedResourcesCount,
+                "mimeType": e.get('mimeType', 'image/svg+xml'),
+                "data": e.get('data'),
+                "x": e.get('x', 0),
+                "y": e.get('y', 0),
+                "width": e.get('width', 64),
+                "height": e.get('height', 64)
+            })
+            embeddedResourcesCount += 1
+        embeddedResources = {'index': embeddedResourcesCount, 'resources': embeddedResourcesList}
+
         self.gliffy_object_raw = {
             'contentType': "application/gliffy+json", 'version': "1.3",
             'metadata': {
@@ -42,10 +62,10 @@ class Gliffy(object):
                     "com.gliffy.libraries.basic.basic_v1.default",
                     "com.gliffy.libraries.swimlanes.swimlanes_v1.default",
                     "com.gliffy.libraries.images"
-                ],
+                ] + extra_libraries,
                 'lastSerialized': 1432113247513
             },
-            'embeddedResources': {'index': 0, 'resources': []},
+            'embeddedResources': embeddedResources,
             'stage': {
                 'objects': [], 'background': "#FFFFFF", 'width': 656, 'height': 175, 'maxWidth': 5000, 'maxHeight': 5000, 'nodeIndex': 0,
                 'autoFit': True, 'exportBorder': False, 'gridOn': True, 'snapToGrid': True, 'drawingGuidesOn': True, 'pageBreaksOn': False, 'printGridOn': False,
@@ -73,9 +93,9 @@ class Gliffy(object):
         self.gliffy_object_raw['stage']['nodeIndex'] = self.current_node_id
         return json.dumps(self.gliffy_object_raw, indent=2)
 
-    def add_object(self, obj):
+    def Item(self, obj):
         self.gliffy_object_raw['stage']['objects'].append(obj)
-        return obj  # So we can get the ID, if we need
+        return obj
 
 
     class GliffyObject(OrderedDict):
@@ -132,8 +152,9 @@ class Gliffy(object):
                 'graphic': {
                     'type': "Text",
                     'Text': {
-                        'tid': None, 'valign': "middle", 'overflow': "none", 'vposition': "none", 'hposition': "none",
-                        'html': '<p style="text-align: center;"><span style="font-family: Arial; font-size: 12px; text-decoration: none;"><span style="text-decoration: none; line-height: 14px;" class="">{text}</span></span></p>'.format(text=self.args[0]),
+                        'tid': None, 'valign': "middle", 'overflow': "none",
+                        'vposition': self.kwargs.get('vposition', 'none'), 'hposition': self.kwargs.get('hposition', 'none'),
+                        'html': '<p style="text-align: center;"><span style="font-family: Arial; font-size: 12px; text-decoration: none;"><span style="text-decoration: none; line-height: 14px;" class="">{text}</span></span></p>'.format(text=self.args[0].encode('utf-8')),
                         'paddingLeft': 8, 'paddingRight': 8, 'paddingBottom': 8, 'paddingTop': 8, 'outerPaddingLeft': 6, 'outerPaddingRight': 6, 'outerPaddingBottom': 2, 'outerPaddingTop': 6
                     }
                 },
@@ -186,31 +207,53 @@ class Gliffy(object):
                 'children': None, 'linkMap': []
             }
 
-            self.parent.add_object(self.data)
-
+            self.parent.Item(self.data)
     def Connect(self, *args, **kwargs):
         return self.ConnectObj(self, args, kwargs)
 
 
     class ShapeObj(GliffyObject):
-        shape_map = {
-            'process': {
-                'uid': 'com.gliffy.shape.flowchart.flowchart_v1.default.process',
-                'graphic': {
-                    'type': "Shape",
-                    'Shape': {
-                        'tid': "com.gliffy.stencil.rectangle.basic_v1", 'strokeWidth': 2, 'strokeColor': "#333333", 'fillColor': "#FFFFFF", 'gradient': False, 'dropShadow': False, 'state': 0, 'shadowX': 0, 'shadowY': 0,'opacity': 1
+        # We are only using shape_map to map the 'uid' and 'graphic' field of the shape.
+        # The rest of the shape is added in apply()
+        shape_map = {}
+
+        def __init__(self, parent, args, kwargs):
+            # We need access to 'self' to generate this shape_map, thats why this shape_map is in __init__
+            self.shape_map = {
+                'svg': {
+                    'uid': 'com.gliffy.shape.basic.basic_v1.default.svg',
+                    'graphic': {
+                        'type': 'Svg',
+                        'Svg': {
+                            'embeddedResourceId': 0, # We will replace this in apply()
+                            'strokeWidth': 2, 'strokeColor': '#000000', 'dropShadow': True, 'shadowX': 5, 'shadowY': 5
+                        }
+                    },
+                },
+                'process': {
+                    'uid': 'com.gliffy.shape.flowchart.flowchart_v1.default.process',
+                    'graphic': {
+                        'type': 'Shape',
+                        'Shape': {
+                            'tid': 'com.gliffy.stencil.rectangle.basic_v1', 'strokeWidth': 2, 'strokeColor': "#333333", 'fillColor': "#FFFFFF", 'gradient': False, 'dropShadow': False, 'state': 0, 'shadowX': 0, 'shadowY': 0,'opacity': 1
+                        }
                     }
-                }
-            },
-        }
+                },
+            }
+            super(self.__class__, self).__init__(parent, args, kwargs)
 
         def apply(self):
             shape = self.args[0]
             shape_info = self.shape_map.get(shape, None)
             if shape_info is None:
-                logger.warn('Invalid shape. {shape} not in {valid_shapes}'.format(shape=shape, valid_shapes=','.join(self.shape_map.keys())))
-                return None
+                raise ShapeException('Invalid shape. "{shape}" not in "{valid_shapes}"'.format(shape=shape, valid_shapes=','.join(self.shape_map.keys())))
+
+            if shape == 'svg':
+                try:
+                    erid = self.parent.embedded_resources_map[self.kwargs['shape_image_name']]
+                except KeyError:
+                    raise ShapeException('Unable to find a shape with name {shape_image_name} in embedded resources. Valid shapes are "{valid_shape_names}"'.format(shape_image_name=kwargs['shape_image_name'], valid_shape_names=','.join(self.parent.embedded_resources_map.keys())))
+                shape_info['graphic']['Svg']['embeddedResourceId'] = erid
 
             children = self.kwargs.get('children', [])
             text = self.kwargs.get('text', None)
@@ -222,13 +265,13 @@ class Gliffy(object):
             import random
             x = random.randint(1,800)
             y = random.randint(1,800)
-            self.data = {
-                'x': x, 'y': y, 'rotation': 0, 'id': self._node_id, 'uid': shape_info['uid'],
-                'width': 151, 'height': 64, 'lockAspectRatio': False, 'lockShape': False, 'order': 4, 'hidden': False,
-                'graphic': shape_info['graphic'],
-                'children': children,
-                'linkMap': []
-            }
 
+            self.data = {
+                'id': self._node_id, 'uid': shape_info['uid'], 'graphic': shape_info['graphic'], 'children': children, 'linkMap': [],
+                'x': x, 'y': y, 'rotation': self.kwargs.get('rotation', 0),
+                'width': self.kwargs.get('width', 100), 'height': self.kwargs.get('height', 100),
+                'lockAspectRatio': self.kwargs.get('lockAspectRatio', False), 'lockShape': self.kwargs.get('lockShape', False),
+                'order': self.kwargs.get('order', 1), 'hidden': self.kwargs.get('hidden', False)
+            }
     def Shape(self, *args, **kwargs):
         return self.ShapeObj(self, args, kwargs)
